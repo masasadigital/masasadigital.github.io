@@ -9,6 +9,9 @@ let currentTheme = localStorage.getItem('theme') || 'light';
 let questionCounter = 0;
 let currentQuote = null;
 let savedQuotes = JSON.parse(localStorage.getItem('savedQuotes')) || [];
+let isAdminAuthenticated = false;
+let adminPassword = '1989'; // Hardcoded admin password
+let adminUploadedFiles = []; // Separate storage for admin PDFs
 
 // Quote sources configuration
 const quoteSources = {
@@ -67,6 +70,313 @@ if (currentTheme === 'dark') {
     document.body.setAttribute('data-theme', 'dark');
     document.getElementById('themeIcon').textContent = '☀️';
     document.getElementById('themeText').textContent = 'Light Mode';
+}
+
+// Admin Authentication
+function showAdminLogin() {
+    const adminTab = document.getElementById('adminTab');
+    const adminLoginModal = document.getElementById('adminLoginModal');
+    
+    if (!adminLoginModal) {
+        // Create modal if it doesn't exist
+        createAdminLoginModal();
+    }
+    
+    adminLoginModal.style.display = 'flex';
+}
+
+function createAdminLoginModal() {
+    const modal = document.createElement('div');
+    modal.id = 'adminLoginModal';
+    modal.className = 'admin-modal-overlay';
+    modal.innerHTML = `
+        <div class="admin-modal">
+            <div class="admin-modal-header">
+                <h3>🔐 Admin Access Required</h3>
+                <button class="close-modal-btn" onclick="closeAdminLogin()">&times;</button>
+            </div>
+            <div class="admin-modal-body">
+                <p>Enter admin password to access document management:</p>
+                <div class="password-input-container">
+                    <input type="password" id="adminPasswordInput" class="admin-password-input" 
+                           placeholder="Enter password..." maxlength="4" autofocus>
+                    <div class="password-hint">Hint: Four digits</div>
+                </div>
+                <div class="admin-login-actions">
+                    <button class="btn btn-primary" onclick="authenticateAdmin()">Login</button>
+                    <button class="btn btn-secondary" onclick="closeAdminLogin()">Cancel</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // Add event listeners
+    const passwordInput = document.getElementById('adminPasswordInput');
+    passwordInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            authenticateAdmin();
+        }
+    });
+    
+    passwordInput.addEventListener('input', function(e) {
+        // Only allow numeric input
+        e.target.value = e.target.value.replace(/[^0-9]/g, '');
+    });
+}
+
+function authenticateAdmin() {
+    const passwordInput = document.getElementById('adminPasswordInput');
+    const enteredPassword = passwordInput.value;
+    
+    if (enteredPassword === adminPassword) {
+        isAdminAuthenticated = true;
+        closeAdminLogin();
+        document.getElementById('adminTab').classList.add('admin-authenticated');
+        renderAdminFiles();
+        showNotification('Admin access granted! 👨‍💼', 'success');
+        
+        // Store authentication temporarily (expires in 30 minutes)
+        localStorage.setItem('adminAuthTime', Date.now());
+        localStorage.setItem('adminAuthenticated', 'true');
+        
+        setTimeout(() => {
+            logoutAdmin();
+        }, 30 * 60 * 1000); // 30 minutes
+        
+    } else {
+        passwordInput.style.borderColor = 'var(--danger-color)';
+        passwordInput.style.boxShadow = '0 0 0 3px rgba(239, 68, 68, 0.1)';
+        showNotification('❌ Incorrect password', 'error');
+        
+        setTimeout(() => {
+            passwordInput.style.borderColor = 'var(--border-color)';
+            passwordInput.style.boxShadow = 'none';
+            passwordInput.value = '';
+            passwordInput.focus();
+        }, 2000);
+    }
+}
+
+function closeAdminLogin() {
+    const adminLoginModal = document.getElementById('adminLoginModal');
+    if (adminLoginModal) {
+        adminLoginModal.style.display = 'none';
+    }
+}
+
+function logoutAdmin() {
+    isAdminAuthenticated = false;
+    document.getElementById('adminTab').classList.remove('admin-authenticated');
+    localStorage.removeItem('adminAuthenticated');
+    localStorage.removeItem('adminAuthTime');
+    adminUploadedFiles = [];
+    showNotification('Admin session expired', 'warning');
+}
+
+// Check for existing admin session
+function checkAdminSession() {
+    const authTime = localStorage.getItem('adminAuthTime');
+    const isAuthenticated = localStorage.getItem('adminAuthenticated');
+    
+    if (isAuthenticated === 'true' && authTime) {
+        const timeDiff = Date.now() - parseInt(authTime);
+        const thirtyMinutes = 30 * 60 * 1000;
+        
+        if (timeDiff < thirtyMinutes) {
+            isAdminAuthenticated = true;
+            document.getElementById('adminTab').classList.add('admin-authenticated');
+            adminUploadedFiles = JSON.parse(localStorage.getItem('adminFiles')) || [];
+            renderAdminFiles();
+        } else {
+            logoutAdmin();
+        }
+    }
+}
+
+// Admin PDF Management
+function handleAdminFileUpload(e) {
+    if (!isAdminAuthenticated) {
+        showNotification('Admin access required', 'error');
+        return;
+    }
+    
+    const files = Array.from(e.target.files).filter(file => file.type === 'application/pdf');
+    
+    files.forEach(file => {
+        if (file.size > 50 * 1024 * 1024) { // 50MB limit for admin
+            showNotification(`File ${file.name} is too large (max 50MB)`, 'error');
+            return;
+        }
+        
+        if (adminUploadedFiles.length >= 20) { // Max 20 admin files
+            showNotification('Maximum 20 admin files allowed', 'error');
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const fileData = {
+                name: file.name,
+                size: formatFileSize(file.size),
+                data: e.target.result,
+                id: Date.now() + Math.random(),
+                uploadedAt: new Date().toLocaleString(),
+                isAdmin: true
+            };
+            
+            adminUploadedFiles.push(fileData);
+            localStorage.setItem('adminFiles', JSON.stringify(adminUploadedFiles));
+            renderAdminFiles();
+            showNotification(`Admin uploaded: ${file.name}`, 'success');
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    e.target.value = '';
+}
+
+function renderAdminFiles() {
+    if (!isAdminAuthenticated) return;
+    
+    const adminFileList = document.getElementById('adminFileList');
+    if (!adminFileList) return;
+    
+    adminFileList.innerHTML = adminUploadedFiles.length > 0 ? 
+        adminUploadedFiles.map(file => `
+            <div class="admin-file-item">
+                <div class="admin-file-info">
+                    <div class="admin-file-icon">🔐</div>
+                    <div>
+                        <div class="admin-file-name">${file.name}</div>
+                        <div class="admin-file-details">
+                            <span class="admin-file-size">${file.size}</span>
+                            <span class="admin-file-date">${file.uploadedAt}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="admin-file-actions">
+                    <button class="btn btn-primary" onclick="loadAdminPDF(${file.id})" title="View in main viewer">
+                        👁️ View
+                    </button>
+                    <button class="btn btn-success" onclick="downloadAdminPDF(${file.id})" title="Download PDF">
+                        ⬇️ Share
+                    </button>
+                    <button class="btn btn-danger" onclick="removeAdminFile(${file.id})" title="Remove from admin">
+                        🗑️ Remove
+                    </button>
+                </div>
+            </div>
+        `).join('') : 
+        '<div class="admin-empty-state">
+            <div class="admin-empty-icon">📚</div>
+            <p>No admin documents yet</p>
+            <p class="admin-empty-subtext">Upload PDFs to make them available for download</p>
+        </div>';
+}
+
+function loadAdminPDF(fileId) {
+    if (!isAdminAuthenticated) return;
+    
+    const file = adminUploadedFiles.find(f => f.id === fileId);
+    if (!file) return;
+
+    currentPDF = file;
+    const loadingTask = pdfjsLib.getDocument({ data: file.data });
+    
+    loadingTask.promise.then(function(pdf) {
+        pdfDoc = pdf;
+        pageNum = 1;
+        document.getElementById('totalPages').textContent = pdf.numPages;
+        renderPage(pageNum);
+        showNotification(`Loaded admin document: ${file.name}`, 'info');
+    }).catch(error => {
+        console.error('Error loading admin PDF:', error);
+        showNotification('Error loading admin PDF', 'error');
+    });
+}
+
+function downloadAdminPDF(fileId) {
+    if (!isAdminAuthenticated) {
+        showNotification('Admin access required to download', 'error');
+        return;
+    }
+    
+    const file = adminUploadedFiles.find(f => f.id === fileId);
+    if (!file) return;
+    
+    const link = document.createElement('a');
+    link.href = file.data;
+    link.download = `admin-${file.name}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification(`Admin download: ${file.name}`, 'success');
+}
+
+function removeAdminFile(fileId) {
+    if (!isAdminAuthenticated) return;
+    
+    if (confirm('Are you sure you want to remove this admin document?')) {
+        adminUploadedFiles = adminUploadedFiles.filter(f => f.id !== fileId);
+        localStorage.setItem('adminFiles', JSON.stringify(adminUploadedFiles));
+        renderAdminFiles();
+        showNotification('Admin document removed', 'info');
+        
+        // Also remove from main viewer if currently loaded
+        if (currentPDF && currentPDF.id === fileId) {
+            currentPDF = null;
+            pdfDoc = null;
+            document.getElementById('viewerContainer').innerHTML = 
+                '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">Select a PDF to view</div>';
+            document.getElementById('currentPage').textContent = '1';
+            document.getElementById('totalPages').textContent = '1';
+        }
+    }
+}
+
+// Modified download functions for regular users
+function downloadCurrentPDF() {
+    if (!currentPDF) {
+        showNotification('No PDF loaded', 'error');
+        return;
+    }
+    
+    // Check if current PDF is admin-only
+    if (currentPDF.isAdmin) {
+        showNotification('🔒 Admin documents can only be downloaded by administrators', 'warning');
+        showAdminLogin();
+        return;
+    }
+    
+    const link = document.createElement('a');
+    link.href = currentPDF.data;
+    link.download = currentPDF.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification('Download started', 'success');
+}
+
+function downloadPDF(fileId) {
+    const file = uploadedFiles.find(f => f.id === fileId);
+    if (!file) return;
+    
+    // Check if file is admin-only
+    if (file.isAdmin) {
+        showNotification('🔒 Admin documents can only be downloaded by administrators', 'warning');
+        showAdminLogin();
+        return;
+    }
+    
+    const link = document.createElement('a');
+    link.href = file.data;
+    link.download = file.name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification('Download started', 'success');
 }
 
 // Quote functionality
@@ -149,6 +459,11 @@ function displayFallbackQuote() {
         {
             text: "The future belongs to those who believe in the beauty of their dreams.",
             author: "Eleanor Roosevelt",
+            source: "Local Wisdom"
+        },
+        {
+            text: "It does not matter how slowly you go as long as you do not stop.",
+            author: "Confucius",
             source: "Local Wisdom"
         }
     ];
@@ -279,7 +594,7 @@ function getNewQuote() {
     getRandomQuote();
 }
 
-// Upload functionality
+// Regular user upload functionality (unchanged)
 document.addEventListener('DOMContentLoaded', function() {
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
@@ -290,6 +605,15 @@ document.addEventListener('DOMContentLoaded', function() {
     uploadArea.addEventListener('dragleave', handleDragLeave);
     uploadArea.addEventListener('drop', handleDrop);
     fileInput.addEventListener('change', handleFiles);
+
+    // Admin file upload setup
+    const adminFileInput = document.getElementById('adminFileInput');
+    if (adminFileInput) {
+        adminFileInput.addEventListener('change', handleAdminFileUpload);
+    }
+
+    // Initialize admin session
+    checkAdminSession();
 
     // Initialize quotes
     renderSavedQuotes();
@@ -349,7 +673,8 @@ function handleFiles(e) {
                 name: file.name,
                 size: formatFileSize(file.size),
                 data: e.target.result,
-                id: Date.now() + Math.random()
+                id: Date.now() + Math.random(),
+                isAdmin: false
             };
             
             uploadedFiles.push(fileData);
@@ -367,7 +692,9 @@ function renderFileList() {
     fileList.innerHTML = uploadedFiles.map(file => `
         <div class="file-item">
             <div class="file-info">
-                <div class="file-icon">PDF</div>
+                <div class="file-icon ${file.isAdmin ? 'admin-file' : ''}">
+                    ${file.isAdmin ? '🔐' : 'PDF'}
+                </div>
                 <div>
                     <div class="file-name">${file.name}</div>
                     <div class="file-size">${file.size}</div>
@@ -375,7 +702,10 @@ function renderFileList() {
             </div>
             <div class="file-actions">
                 <button class="btn btn-primary" onclick="loadPDF(${file.id})">View</button>
-                <button class="btn btn-success" onclick="downloadPDF(${file.id})">Download</button>
+                ${!file.isAdmin ? 
+                    `<button class="btn btn-success" onclick="downloadPDF(${file.id})">Download</button>` : 
+                    `<button class="btn btn-secondary" onclick="showAdminLogin()" title="Admin access required">🔒 Admin</button>`
+                }
                 <button class="btn btn-danger" onclick="removeFile(${file.id})">Remove</button>
             </div>
         </div>
@@ -391,7 +721,8 @@ function formatFileSize(bytes) {
 }
 
 function loadPDF(fileId) {
-    const file = uploadedFiles.find(f => f.id === fileId);
+    // Allow viewing of both regular and admin PDFs
+    const file = [...uploadedFiles, ...adminUploadedFiles].find(f => f.id === fileId);
     if (!file) return;
 
     currentPDF = file;
@@ -452,33 +783,6 @@ function previousPage() {
 function nextPage() {
     if (pageNum >= pdfDoc.numPages) return;
     renderPage(pageNum + 1);
-}
-
-function downloadCurrentPDF() {
-    if (!currentPDF) {
-        showNotification('No PDF loaded', 'error');
-        return;
-    }
-    
-    const link = document.createElement('a');
-    link.href = currentPDF.data;
-    link.download = currentPDF.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showNotification('Download started', 'success');
-}
-
-function downloadPDF(fileId) {
-    const file = uploadedFiles.find(f => f.id === fileId);
-    if (!file) return;
-    
-    const link = document.createElement('a');
-    link.href = file.data;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
 }
 
 function removeFile(fileId) {
@@ -601,6 +905,9 @@ document.addEventListener('keydown', function(e) {
             case 'q':
                 if (e.shiftKey) getNewQuote();
                 break;
+            case 'a':
+                if (e.shiftKey) showAdminLogin();
+                break;
         }
     }
 });
@@ -613,3 +920,27 @@ function adjustViewerHeight() {
     const availableHeight = window.innerHeight - headerHeight - 200;
     viewerContainer.style.height = Math.max(400, availableHeight) + 'px';
 }
+
+// Export functions for global access
+window.showAdminLogin = showAdminLogin;
+window.authenticateAdmin = authenticateAdmin;
+window.closeAdminLogin = closeAdminLogin;
+window.loadAdminPDF = loadAdminPDF;
+window.downloadAdminPDF = downloadAdminPDF;
+window.removeAdminFile = removeAdminFile;
+window.getNewQuote = getNewQuote;
+window.getQuoteByCategory = getQuoteByCategory;
+window.shareQuote = shareQuote;
+window.saveQuote = saveQuote;
+window.removeSavedQuote = removeSavedQuote;
+window.loadSavedQuote = loadSavedQuote;
+window.addQuestion = addQuestion;
+window.previousPage = previousPage;
+window.nextPage = nextPage;
+window.downloadCurrentPDF = downloadCurrentPDF;
+window.downloadPDF = downloadPDF;
+window.removeFile = removeFile;
+window.saveQuestions = saveQuestions;
+window.removeQuestion = removeQuestion;
+window.updateQuestion = updateQuestion;
+window.toggleTheme = toggleTheme;
