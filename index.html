@@ -3,18 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Masasa Learning Centre</title>
+    <title>PDF Document Manager - Secure Viewer & Download Tracker</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-    <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
+    <!-- Theme Toggle -->
     <div class="theme-toggle" onclick="toggleTheme()">
         <span id="themeIcon">🌙</span>
         <span id="themeText">Dark Mode</span>
     </div>
 
+    <!-- Navigation Tabs -->
+    <nav class="tab-navigation">
+        <div class="tabs-container">
+            <button class="tab-btn active" data-tab="viewer" onclick="switchTab('viewer')">
+                <span class="tab-icon">👁️</span>
+                <span class="tab-label">Viewer</span>
+            </button>
+            <button class="tab-btn" data-tab="downloads" onclick="switchTab('downloads')">
+                <span class="tab-icon">⬇️</span>
+                <span class="tab-label">Downloads</span>
+                <span class="download-count" id="downloadCount">0</span>
+            </button>
+            <button class="tab-btn admin-tab-btn" data-tab="admin" onclick="showAdminLogin()">
+                <span class="tab-icon">🔐</span>
+                <span class="tab-label">Admin</span>
+                <span class="admin-status" id="adminStatus">Locked</span>
+            </button>
+        </div>
+    </nav>
+
     <div class="app-wrapper">
-        <!-- Sidebar -->
+        <!-- Sidebar - Daily Motivation -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <h3 class="sidebar-title">💡 Daily Motivation</h3>
@@ -48,62 +70,122 @@
                     <button class="category-btn" data-category="happiness" onclick="getQuoteByCategory('happiness')">Happiness</button>
                 </div>
             </div>
-            
-            <div class="saved-quotes" id="savedQuotes">
-                <h4>Saved Quotes</h4>
-                <div class="saved-quotes-list" id="savedQuotesList"></div>
-            </div>
         </aside>
+
+        <!-- Admin Tab Content -->
+        <div class="admin-tab-content" id="adminTabContent">
+            <div class="admin-panel" id="adminPanel">
+                <div class="admin-header">
+                    <h3>👨‍💼 Admin Document Management</h3>
+                    <div class="admin-actions">
+                        <button class="btn btn-danger" onclick="logoutAdmin()">Logout</button>
+                        <span class="admin-session-timer" id="adminSessionTimer">30:00</span>
+                    </div>
+                </div>
+                
+                <div class="admin-upload-section">
+                    <h4>📤 Upload Admin Documents</h4>
+                    <div class="admin-upload-area" id="adminUploadArea">
+                        <input type="file" id="adminFileInput" accept=".pdf" multiple>
+                        <div class="admin-upload-content" onclick="document.getElementById('adminFileInput').click()">
+                            <div class="admin-upload-icon">📄</div>
+                            <div class="admin-upload-text">Drop PDF files here or click to browse</div>
+                            <div class="admin-upload-subtext">Max 50MB each, up to 20 files</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="admin-files-section">
+                    <h4>📚 Available Documents (<span id="adminFileCount">0</span>)</h4>
+                    <div class="admin-file-list" id="adminFileList"></div>
+                </div>
+            </div>
+        </div>
 
         <!-- Main Content -->
         <main class="main-content-wrapper">
-            <div class="container">
-                <div class="header">
-                    <h1>PDF Document Manager</h1>
-                    <p>Upload, view, and manage your PDF documents with an intuitive interface. Create questions and annotations directly within your documents.</p>
+            <div class="tab-content active" id="viewerTab">
+                <div class="container">
+                    <div class="header">
+                        <h1>PDF Document Viewer</h1>
+                        <p>Securely view PDF documents with enterprise-grade access control. All downloads are tracked for security.</p>
+                    </div>
+
+                    <div class="main-content">
+                        <div class="upload-section">
+                            <h2 class="section-title">📁 My Uploads</h2>
+                            <div class="upload-area" id="uploadArea">
+                                <div class="upload-icon">📄</div>
+                                <div class="upload-text">Drop PDF files here or click to browse</div>
+                                <div class="upload-subtext">Max 10MB each, up to 5 files</div>
+                                <input type="file" id="fileInput" accept=".pdf" multiple>
+                            </div>
+                            <div class="file-list" id="fileList"></div>
+                        </div>
+
+                        <div class="viewer-section">
+                            <h2 class="section-title">👁️ Document Viewer</h2>
+                            <div class="viewer-controls">
+                                <div class="page-info">
+                                    <span id="currentPage">1</span> / <span id="totalPages">1</span>
+                                </div>
+                                <div class="navigation-btns">
+                                    <button class="btn btn-primary" id="prevPage" onclick="previousPage()" disabled>← Previous</button>
+                                    <button class="btn btn-primary" id="nextPage" onclick="nextPage()" disabled>Next →</button>
+                                    <button class="btn btn-success" id="downloadBtn" onclick="downloadCurrentPDF()">⬇️ Download</button>
+                                </div>
+                            </div>
+                            <div class="viewer-container" id="viewerContainer">
+                                <div class="viewer-placeholder">
+                                    <div class="placeholder-icon">📄</div>
+                                    <p>Select a PDF to view</p>
+                                    <p class="placeholder-subtext">Upload files or contact admin for access</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="questions-section">
+                        <div class="questions-header">
+                            <h2 class="questions-title">❓ Document Notes</h2>
+                            <button class="add-question-btn" onclick="addQuestion()">+ Add Note</button>
+                        </div>
+                        <div class="questions-container" id="questionsContainer"></div>
+                        <button class="save-questions-btn" onclick="saveQuestions()">💾 Save Notes</button>
+                    </div>
                 </div>
+            </div>
 
-                <div class="main-content">
-                    <div class="upload-section">
-                        <h2 class="section-title">📁 Document Upload</h2>
-                        <div class="upload-area" id="uploadArea">
-                            <div class="upload-icon">📄</div>
-                            <div class="upload-text">Drop PDF files here or click to browse</div>
-                            <div class="upload-subtext">Supports multiple PDF uploads (max 10MB each)</div>
-                            <input type="file" id="fileInput" accept=".pdf" multiple>
-                        </div>
-                        <div class="file-list" id="fileList"></div>
+            <!-- Downloads Tab -->
+            <div class="tab-content" id="downloadsTab">
+                <div class="container">
+                    <div class="header">
+                        <h1>📥 Download History</h1>
+                        <p>Track all PDF downloads with timestamps and file details. All downloads are logged for security.</p>
                     </div>
 
-                    <div class="viewer-section">
-                        <h2 class="section-title">👁️ Document Viewer</h2>
-                        <div class="viewer-controls">
-                            <div class="page-info">
-                                <span id="currentPage">1</span> / <span id="totalPages">1</span>
-                            </div>
-                            <div class="navigation-btns">
-                                <button class="btn btn-primary" id="prevPage" onclick="previousPage()">← Previous</button>
-                                <button class="btn btn-primary" id="nextPage" onclick="nextPage()">Next →</button>
-                                <button class="btn btn-success" id="downloadBtn" onclick="downloadCurrentPDF()">⬇️ Download</button>
+                    <div class="downloads-section">
+                        <div class="downloads-header">
+                            <div class="download-header-col file-name">File Name</div>
+                            <div class="download-header-col size">Size</div>
+                            <div class="download-header-col date">Downloaded</div>
+                            <div class="download-header-col source">Source</div>
+                            <div class="download-header-col actions">Actions</div>
+                        </div>
+                        
+                        <div class="downloads-list" id="downloadsList">
+                            <div class="download-empty-state">
+                                <div class="empty-icon">📥</div>
+                                <p>No downloads yet</p>
+                                <p class="empty-subtext">Download PDFs from the Viewer tab to see them here</p>
                             </div>
                         </div>
-                        <div class="viewer-container" id="viewerContainer">
-                            <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">
-                                Select a PDF to view
-                            </div>
+                        
+                        <div class="downloads-actions">
+                            <button class="btn btn-secondary" onclick="clearDownloads()">🗑️ Clear All</button>
+                            <button class="btn btn-primary" onclick="exportDownloads()">📤 Export History</button>
                         </div>
                     </div>
-                </div>
-
-                <div class="questions-section">
-                    <div class="questions-header">
-                        <h2 class="questions-title">❓ Document Questions & Notes</h2>
-                        <button class="add-question-btn" onclick="addQuestion()">+ Add Question</button>
-                    </div>
-                    <div class="questions-container" id="questionsContainer">
-                        <!-- Questions will be dynamically added here -->
-                    </div>
-                    <button class="save-questions-btn" onclick="saveQuestions()">💾 Save All Questions</button>
                 </div>
             </div>
         </main>
