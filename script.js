@@ -4,14 +4,17 @@ let pdfDoc = null;
 let pageNum = 1;
 let scale = 1.5;
 let questions = [];
-let uploadedFiles = [];
+let userUploadedFiles = [];
+let adminUploadedFiles = [];
+let downloadedFiles = JSON.parse(localStorage.getItem('downloadedFiles')) || [];
 let currentTheme = localStorage.getItem('theme') || 'light';
 let questionCounter = 0;
 let currentQuote = null;
 let savedQuotes = JSON.parse(localStorage.getItem('savedQuotes')) || [];
 let isAdminAuthenticated = false;
-let adminPassword = '1989'; // Hardcoded admin password
-let adminUploadedFiles = []; // Separate storage for admin PDFs
+let adminPassword = '1989';
+let adminSessionTimeout = null;
+let currentTab = 'viewer';
 
 // Quote sources configuration
 const quoteSources = {
@@ -30,21 +33,58 @@ const quoteSources = {
             author: data.author,
             source: 'Quotable'
         })
-    },
-    typefit: {
-        url: 'https://type.fit/api/quotes',
-        format: (data, index) => ({
-            text: data[index].text,
-            author: data[index].author || 'Unknown',
-            source: 'Type.fit'
-        })
     }
 };
 
 // Initialize PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-// Theme management
+// DOM Ready
+document.addEventListener('DOMContentLoaded', function() {
+    initializeApp();
+});
+
+function initializeApp() {
+    // Theme management
+    setupTheme();
+    
+    // Event listeners
+    setupEventListeners();
+    
+    // Admin session check
+    checkAdminSession();
+    
+    // Initialize components
+    renderSavedQuotes();
+    getRandomQuote();
+    initializeQuestions();
+    renderUserFileList();
+    renderAdminFiles();
+    renderDownloadHistory();
+    updateDownloadCount();
+    updateAdminFileCount();
+    
+    // Responsive adjustments
+    adjustViewerHeight();
+    window.addEventListener('resize', adjustViewerHeight);
+    
+    // Mobile interactions
+    setupMobileInteractions();
+}
+
+// Theme Management
+function setupTheme() {
+    const body = document.body;
+    const themeIcon = document.getElementById('themeIcon');
+    const themeText = document.getElementById('themeText');
+    
+    if (currentTheme === 'dark') {
+        body.setAttribute('data-theme', 'dark');
+        themeIcon.textContent = '☀️';
+        themeText.textContent = 'Light Mode';
+    }
+}
+
 function toggleTheme() {
     const body = document.body;
     const themeIcon = document.getElementById('themeIcon');
@@ -65,24 +105,86 @@ function toggleTheme() {
     localStorage.setItem('theme', currentTheme);
 }
 
-// Set initial theme
-if (currentTheme === 'dark') {
-    document.body.setAttribute('data-theme', 'dark');
-    document.getElementById('themeIcon').textContent = '☀️';
-    document.getElementById('themeText').textContent = 'Light Mode';
+// Tab Management
+function switchTab(tabName) {
+    if (currentTab === tabName) return;
+    
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    
+    // Update tab content
+    document.querySelectorAll('.tab-content').forEach(content => {
+        content.classList.remove('active');
+    });
+    document.getElementById(`${tabName}Tab`).classList.add('active');
+    
+    currentTab = tabName;
+    
+    // Close admin panel if open
+    if (tabName !== 'admin' && isAdminAuthenticated) {
+        document.getElementById('adminTabContent').classList.remove('open');
+    }
+}
+
+// Event Listeners Setup
+function setupEventListeners() {
+    // User upload functionality
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    
+    uploadArea.addEventListener('click', () => fileInput.click());
+    uploadArea.addEventListener('dragover', handleUserDragOver);
+    uploadArea.addEventListener('dragleave', handleUserDragLeave);
+    uploadArea.addEventListener('drop', handleUserDrop);
+    fileInput.addEventListener('change', handleUserFiles);
+    
+    // Admin file upload
+    const adminFileInput = document.getElementById('adminFileInput');
+    const adminUploadArea = document.getElementById('adminUploadArea');
+    
+    if (adminFileInput) {
+        adminFileInput.addEventListener('change', handleAdminFiles);
+    }
+    
+    if (adminUploadArea) {
+        adminUploadArea.addEventListener('dragover', handleAdminDragOver);
+        adminUploadArea.addEventListener('dragleave', handleAdminDragLeave);
+        adminUploadArea.addEventListener('drop', handleAdminDrop);
+    }
+    
+    // Keyboard shortcuts
+    setupKeyboardShortcuts();
+}
+
+function setupMobileInteractions() {
+    const sidebar = document.querySelector('.sidebar');
+    document.addEventListener('click', (e) => {
+        if (window.innerWidth <= 1200 && !sidebar.contains(e.target)) {
+            sidebar.classList.remove('open');
+        }
+    });
 }
 
 // Admin Authentication
 function showAdminLogin() {
-    const adminTab = document.getElementById('adminTab');
-    const adminLoginModal = document.getElementById('adminLoginModal');
-    
-    if (!adminLoginModal) {
-        // Create modal if it doesn't exist
-        createAdminLoginModal();
+    if (isAdminAuthenticated) {
+        // Toggle admin panel
+        const adminTabContent = document.getElementById('adminTabContent');
+        adminTabContent.classList.toggle('open');
+        if (adminTabContent.classList.contains('open')) {
+            renderAdminFiles();
+            startAdminSessionTimer();
+        }
+    } else {
+        const modal = document.getElementById('adminLoginModal');
+        if (!modal) {
+            createAdminLoginModal();
+        }
+        document.getElementById('adminLoginModal').classList.add('show');
     }
-    
-    adminLoginModal.style.display = 'flex';
 }
 
 function createAdminLoginModal() {
@@ -96,14 +198,14 @@ function createAdminLoginModal() {
                 <button class="close-modal-btn" onclick="closeAdminLogin()">&times;</button>
             </div>
             <div class="admin-modal-body">
-                <p>Enter admin password to access document management:</p>
+                <p>Enter admin password to upload and manage documents:</p>
                 <div class="password-input-container">
                     <input type="password" id="adminPasswordInput" class="admin-password-input" 
-                           placeholder="Enter password..." maxlength="4" autofocus>
-                    <div class="password-hint">Hint: Four digits</div>
+                           placeholder="••••" maxlength="4" autofocus>
+                    <div class="password-hint">Four-digit PIN required</div>
                 </div>
                 <div class="admin-login-actions">
-                    <button class="btn btn-primary" onclick="authenticateAdmin()">Login</button>
+                    <button class="btn btn-primary" onclick="authenticateAdmin()">Enter</button>
                     <button class="btn btn-secondary" onclick="closeAdminLogin()">Cancel</button>
                 </div>
             </div>
@@ -112,7 +214,6 @@ function createAdminLoginModal() {
     
     document.body.appendChild(modal);
     
-    // Add event listeners
     const passwordInput = document.getElementById('adminPasswordInput');
     passwordInput.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') {
@@ -121,7 +222,6 @@ function createAdminLoginModal() {
     });
     
     passwordInput.addEventListener('input', function(e) {
-        // Only allow numeric input
         e.target.value = e.target.value.replace(/[^0-9]/g, '');
     });
 }
@@ -133,26 +233,23 @@ function authenticateAdmin() {
     if (enteredPassword === adminPassword) {
         isAdminAuthenticated = true;
         closeAdminLogin();
-        document.getElementById('adminTab').classList.add('admin-authenticated');
+        document.querySelector('.admin-tab-btn').classList.add('admin-authenticated');
+        document.getElementById('adminTabContent').classList.add('open');
+        adminUploadedFiles = JSON.parse(localStorage.getItem('adminFiles')) || [];
         renderAdminFiles();
-        showNotification('Admin access granted! 👨‍💼', 'success');
+        updateAdminFileCount();
+        startAdminSessionTimer();
+        showNotification('✅ Admin access granted!', 'success');
         
-        // Store authentication temporarily (expires in 30 minutes)
         localStorage.setItem('adminAuthTime', Date.now());
         localStorage.setItem('adminAuthenticated', 'true');
         
-        setTimeout(() => {
-            logoutAdmin();
-        }, 30 * 60 * 1000); // 30 minutes
-        
     } else {
-        passwordInput.style.borderColor = 'var(--danger-color)';
-        passwordInput.style.boxShadow = '0 0 0 3px rgba(239, 68, 68, 0.1)';
-        showNotification('❌ Incorrect password', 'error');
+        passwordInput.classList.add('error');
+        showNotification('❌ Access denied - Incorrect PIN', 'error');
         
         setTimeout(() => {
-            passwordInput.style.borderColor = 'var(--border-color)';
-            passwordInput.style.boxShadow = 'none';
+            passwordInput.classList.remove('error');
             passwordInput.value = '';
             passwordInput.focus();
         }, 2000);
@@ -160,22 +257,50 @@ function authenticateAdmin() {
 }
 
 function closeAdminLogin() {
-    const adminLoginModal = document.getElementById('adminLoginModal');
-    if (adminLoginModal) {
-        adminLoginModal.style.display = 'none';
+    const modal = document.getElementById('adminLoginModal');
+    if (modal) {
+        modal.classList.remove('show');
     }
+}
+
+function startAdminSessionTimer() {
+    let timeLeft = 30 * 60; // 30 minutes
+    const timerElement = document.getElementById('adminSessionTimer');
+    
+    if (adminSessionTimeout) {
+        clearInterval(adminSessionTimeout);
+    }
+    
+    adminSessionTimeout = setInterval(() => {
+        if (timeLeft <= 0) {
+            clearInterval(adminSessionTimeout);
+            logoutAdmin();
+            return;
+        }
+        
+        const minutes = Math.floor(timeLeft / 60);
+        const seconds = timeLeft % 60;
+        timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        timeLeft--;
+    }, 1000);
 }
 
 function logoutAdmin() {
     isAdminAuthenticated = false;
-    document.getElementById('adminTab').classList.remove('admin-authenticated');
+    document.querySelector('.admin-tab-btn').classList.remove('admin-authenticated');
+    document.getElementById('adminTabContent').classList.remove('open');
+    
+    if (adminSessionTimeout) {
+        clearInterval(adminSessionTimeout);
+        adminSessionTimeout = null;
+    }
+    
     localStorage.removeItem('adminAuthenticated');
     localStorage.removeItem('adminAuthTime');
-    adminUploadedFiles = [];
-    showNotification('Admin session expired', 'warning');
+    document.getElementById('adminSessionTimer').textContent = '30:00';
+    showNotification('🔒 Admin session expired', 'warning');
 }
 
-// Check for existing admin session
 function checkAdminSession() {
     const authTime = localStorage.getItem('adminAuthTime');
     const isAuthenticated = localStorage.getItem('adminAuthenticated');
@@ -186,17 +311,18 @@ function checkAdminSession() {
         
         if (timeDiff < thirtyMinutes) {
             isAdminAuthenticated = true;
-            document.getElementById('adminTab').classList.add('admin-authenticated');
+            document.querySelector('.admin-tab-btn').classList.add('admin-authenticated');
             adminUploadedFiles = JSON.parse(localStorage.getItem('adminFiles')) || [];
             renderAdminFiles();
+            updateAdminFileCount();
         } else {
             logoutAdmin();
         }
     }
 }
 
-// Admin PDF Management
-function handleAdminFileUpload(e) {
+// Admin File Management
+function handleAdminFiles(e) {
     if (!isAdminAuthenticated) {
         showNotification('Admin access required', 'error');
         return;
@@ -205,36 +331,63 @@ function handleAdminFileUpload(e) {
     const files = Array.from(e.target.files).filter(file => file.type === 'application/pdf');
     
     files.forEach(file => {
-        if (file.size > 50 * 1024 * 1024) { // 50MB limit for admin
-            showNotification(`File ${file.name} is too large (max 50MB)`, 'error');
+        if (file.size > 50 * 1024 * 1024) { // 50MB limit
+            showNotification(`❌ ${file.name} is too large (max 50MB)`, 'error');
             return;
         }
         
-        if (adminUploadedFiles.length >= 20) { // Max 20 admin files
-            showNotification('Maximum 20 admin files allowed', 'error');
+        if (adminUploadedFiles.length >= 20) {
+            showNotification('⚠️ Maximum 20 admin files allowed', 'warning');
             return;
         }
 
         const reader = new FileReader();
         reader.onload = function(e) {
             const fileData = {
+                id: Date.now() + Math.random(),
                 name: file.name,
                 size: formatFileSize(file.size),
+                originalSize: file.size,
                 data: e.target.result,
-                id: Date.now() + Math.random(),
                 uploadedAt: new Date().toLocaleString(),
-                isAdmin: true
+                isAdmin: true,
+                downloadCount: 0
             };
             
-            adminUploadedFiles.push(fileData);
+            adminUploadedFiles.unshift(fileData);
             localStorage.setItem('adminFiles', JSON.stringify(adminUploadedFiles));
             renderAdminFiles();
-            showNotification(`Admin uploaded: ${file.name}`, 'success');
+            updateAdminFileCount();
+            showNotification(`✅ ${file.name} uploaded successfully`, 'success');
         };
+        
+        reader.onerror = function() {
+            showNotification(`❌ Failed to read ${file.name}`, 'error');
+        };
+        
         reader.readAsArrayBuffer(file);
     });
 
     e.target.value = '';
+}
+
+function handleAdminDragOver(e) {
+    e.preventDefault();
+    e.currentTarget.classList.add('dragover');
+}
+
+function handleAdminDragLeave(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('dragover');
+}
+
+function handleAdminDrop(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('dragover');
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type === 'application/pdf');
+    const adminFileInput = document.getElementById('adminFileInput');
+    adminFileInput.files = files;
+    handleAdminFiles({ target: adminFileInput });
 }
 
 function renderAdminFiles() {
@@ -243,511 +396,459 @@ function renderAdminFiles() {
     const adminFileList = document.getElementById('adminFileList');
     if (!adminFileList) return;
     
-    adminFileList.innerHTML = adminUploadedFiles.length > 0 ? 
-        adminUploadedFiles.map(file => `
-            <div class="admin-file-item">
-                <div class="admin-file-info">
-                    <div class="admin-file-icon">🔐</div>
-                    <div>
-                        <div class="admin-file-name">${file.name}</div>
-                        <div class="admin-file-details">
-                            <span class="admin-file-size">${file.size}</span>
-                            <span class="admin-file-date">${file.uploadedAt}</span>
-                        </div>
+    if (adminUploadedFiles.length === 0) {
+        adminFileList.innerHTML = `
+            <div class="admin-empty-state">
+                <div class="admin-empty-icon">📚</div>
+                <p>No documents available</p>
+                <p class="admin-empty-subtext">Upload PDFs using the upload area above</p>
+            </div>
+        `;
+        return;
+    }
+    
+    adminFileList.innerHTML = adminUploadedFiles.map(file => `
+        <div class="admin-file-item">
+            <div class="admin-file-info">
+                <div class="admin-file-icon">📄</div>
+                <div>
+                    <div class="admin-file-name">${file.name}</div>
+                    <div class="admin-file-details">
+                        <span class="admin-file-size">${file.size}</span>
+                        <span class="admin-file-date">${formatDate(file.uploadedAt)}</span>
+                        <span class="admin-download-count">${file.downloadCount} downloads</span>
                     </div>
                 </div>
-                <div class="admin-file-actions">
-                    <button class="btn btn-primary" onclick="loadAdminPDF(${file.id})" title="View in main viewer">
-                        👁️ View
-                    </button>
-                    <button class="btn btn-success" onclick="downloadAdminPDF(${file.id})" title="Download PDF">
-                        ⬇️ Share
-                    </button>
-                    <button class="btn btn-danger" onclick="removeAdminFile(${file.id})" title="Remove from admin">
-                        🗑️ Remove
-                    </button>
-                </div>
             </div>
-        `).join('') : 
-        '<div class="admin-empty-state">
-            <div class="admin-empty-icon">📚</div>
-            <p>No admin documents yet</p>
-            <p class="admin-empty-subtext">Upload PDFs to make them available for download</p>
-        </div>';
+            <div class="admin-file-actions">
+                <button class="btn btn-primary" onclick="loadAdminPDF(${file.id})" title="View in main viewer">
+                    👁️ View
+                </button>
+                <button class="btn btn-success" onclick="downloadAdminPDF(${file.id})" title="Download PDF">
+                    ⬇️ Share
+                </button>
+                <button class="btn btn-danger" onclick="removeAdminFile(${file.id})" title="Remove document">
+                    🗑️ Remove
+                </button>
+            </div>
+        </div>
+    `).join('');
 }
 
 function loadAdminPDF(fileId) {
-    if (!isAdminAuthenticated) return;
-    
     const file = adminUploadedFiles.find(f => f.id === fileId);
     if (!file) return;
 
-    currentPDF = file;
+    currentPDF = { ...file, source: 'admin' };
     const loadingTask = pdfjsLib.getDocument({ data: file.data });
+    
+    showLoadingState(`Loading ${file.name}...`);
     
     loadingTask.promise.then(function(pdf) {
         pdfDoc = pdf;
         pageNum = 1;
         document.getElementById('totalPages').textContent = pdf.numPages;
         renderPage(pageNum);
-        showNotification(`Loaded admin document: ${file.name}`, 'info');
+        showNotification(`📖 ${file.name} loaded`, 'info');
+        switchTab('viewer');
     }).catch(error => {
         console.error('Error loading admin PDF:', error);
-        showNotification('Error loading admin PDF', 'error');
+        showNotification('❌ Error loading document', 'error');
+        resetViewer();
     });
 }
 
 function downloadAdminPDF(fileId) {
-    if (!isAdminAuthenticated) {
-        showNotification('Admin access required to download', 'error');
-        return;
-    }
-    
     const file = adminUploadedFiles.find(f => f.id === fileId);
     if (!file) return;
     
+    // Increment download count
+    file.downloadCount = (file.downloadCount || 0) + 1;
+    localStorage.setItem('adminFiles', JSON.stringify(adminUploadedFiles));
+    renderAdminFiles();
+    updateAdminFileCount();
+    
+    // Trigger download
     const link = document.createElement('a');
     link.href = file.data;
-    link.download = `admin-${file.name}`;
+    link.download = `admin-${Date.now()}-${file.name}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showNotification(`Admin download: ${file.name}`, 'success');
+    
+    // Log download
+    logDownload(file);
+    showNotification(`✅ ${file.name} shared successfully`, 'success');
 }
 
 function removeAdminFile(fileId) {
-    if (!isAdminAuthenticated) return;
-    
-    if (confirm('Are you sure you want to remove this admin document?')) {
+    if (confirm('Are you sure you want to permanently remove this document?')) {
         adminUploadedFiles = adminUploadedFiles.filter(f => f.id !== fileId);
         localStorage.setItem('adminFiles', JSON.stringify(adminUploadedFiles));
         renderAdminFiles();
-        showNotification('Admin document removed', 'info');
+        updateAdminFileCount();
+        showNotification('🗑️ Document removed', 'info');
         
-        // Also remove from main viewer if currently loaded
         if (currentPDF && currentPDF.id === fileId) {
-            currentPDF = null;
-            pdfDoc = null;
-            document.getElementById('viewerContainer').innerHTML = 
-                '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">Select a PDF to view</div>';
-            document.getElementById('currentPage').textContent = '1';
-            document.getElementById('totalPages').textContent = '1';
+            resetViewer();
         }
     }
 }
 
-// Modified download functions for regular users
-function downloadCurrentPDF() {
-    if (!currentPDF) {
-        showNotification('No PDF loaded', 'error');
-        return;
-    }
-    
-    // Check if current PDF is admin-only
-    if (currentPDF.isAdmin) {
-        showNotification('🔒 Admin documents can only be downloaded by administrators', 'warning');
-        showAdminLogin();
-        return;
-    }
-    
-    const link = document.createElement('a');
-    link.href = currentPDF.data;
-    link.download = currentPDF.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showNotification('Download started', 'success');
-}
-
-function downloadPDF(fileId) {
-    const file = uploadedFiles.find(f => f.id === fileId);
-    if (!file) return;
-    
-    // Check if file is admin-only
-    if (file.isAdmin) {
-        showNotification('🔒 Admin documents can only be downloaded by administrators', 'warning');
-        showAdminLogin();
-        return;
-    }
-    
-    const link = document.createElement('a');
-    link.href = file.data;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showNotification('Download started', 'success');
-}
-
-// Quote functionality
-async function getRandomQuote() {
-    const quoteLoading = document.getElementById('quoteLoading');
-    const quoteContent = document.getElementById('quoteContent');
-    
-    quoteLoading.style.display = 'flex';
-    quoteContent.style.display = 'none';
-    
-    try {
-        // Randomly select a source
-        const sources = Object.keys(quoteSources);
-        const randomSource = sources[Math.floor(Math.random() * sources.length)];
-        const source = quoteSources[randomSource];
-        
-        const response = await fetch(source.url);
-        const data = await response.json();
-        
-        if (randomSource === 'typefit') {
-            // Type.fit returns an array, pick random
-            const randomIndex = Math.floor(Math.random() * data.length);
-            currentQuote = source.format(data, randomIndex);
-        } else {
-            currentQuote = source.format(data);
-        }
-        
-        displayQuote();
-        showNotification('New inspiration loaded!', 'success');
-        
-    } catch (error) {
-        console.error('Error fetching quote:', error);
-        // Fallback to local quotes
-        displayFallbackQuote();
-        showNotification('Using local inspiration', 'info');
+function updateAdminFileCount() {
+    const countElement = document.getElementById('adminFileCount');
+    if (countElement) {
+        countElement.textContent = adminUploadedFiles.length;
     }
 }
 
-function displayQuote() {
-    const quoteLoading = document.getElementById('quoteLoading');
-    const quoteText = document.getElementById('quoteText');
-    const quoteAuthor = document.getElementById('quoteAuthor');
-    const quoteSource = document.getElementById('quoteSource');
-    const quoteContent = document.getElementById('quoteContent');
-    
-    quoteText.textContent = `"${currentQuote.text}"`;
-    quoteAuthor.textContent = `— ${currentQuote.author}`;
-    quoteSource.textContent = currentQuote.source;
-    
-    quoteLoading.style.display = 'none';
-    quoteContent.style.display = 'block';
-    
-    // Animate the quote appearance
-    quoteContent.style.opacity = '0';
-    quoteContent.style.transform = 'translateY(20px)';
-    setTimeout(() => {
-        quoteContent.style.transition = 'all 0.5s ease';
-        quoteContent.style.opacity = '1';
-        quoteContent.style.transform = 'translateY(0)';
-    }, 100);
-}
-
-function displayFallbackQuote() {
-    const fallbackQuotes = [
-        {
-            text: "The only way to do great work is to love what you do.",
-            author: "Steve Jobs",
-            source: "Local Wisdom"
-        },
-        {
-            text: "Success is not final, failure is not fatal: it is the courage to continue that counts.",
-            author: "Winston Churchill",
-            source: "Local Wisdom"
-        },
-        {
-            text: "Innovation distinguishes between a leader and a follower.",
-            author: "Steve Jobs",
-            source: "Local Wisdom"
-        },
-        {
-            text: "The future belongs to those who believe in the beauty of their dreams.",
-            author: "Eleanor Roosevelt",
-            source: "Local Wisdom"
-        },
-        {
-            text: "It does not matter how slowly you go as long as you do not stop.",
-            author: "Confucius",
-            source: "Local Wisdom"
-        }
-    ];
-    
-    const randomQuote = fallbackQuotes[Math.floor(Math.random() * fallbackQuotes.length)];
-    currentQuote = randomQuote;
-    displayQuote();
-}
-
-async function getQuoteByCategory(category) {
-    try {
-        // Using Quotable API with tags
-        const response = await fetch(`https://api.quotable.io/random?tags=${category}`);
-        const data = await response.json();
-        
-        currentQuote = {
-            text: data.content,
-            author: data.author,
-            source: `Quotable - ${category.charAt(0).toUpperCase() + category.slice(1)}`
-        };
-        
-        displayQuote();
-        showNotification(`${category} quote loaded!`, 'info');
-        
-    } catch (error) {
-        console.error('Error fetching category quote:', error);
-        displayFallbackQuote();
-        showNotification('Category quote unavailable, showing random inspiration', 'warning');
-    }
-}
-
-function shareQuote() {
-    if (!currentQuote) {
-        showNotification('No quote to share', 'error');
-        return;
-    }
-    
-    const shareText = `"${currentQuote.text}" — ${currentQuote.author}\n#DailyMotivation #${currentQuote.source}`;
-    
-    if (navigator.share) {
-        navigator.share({
-            title: 'Daily Motivation',
-            text: shareText,
-            url: window.location.href
-        });
-    } else {
-        // Fallback to clipboard
-        navigator.clipboard.writeText(shareText).then(() => {
-            showNotification('Quote copied to clipboard!', 'success');
-        }).catch(() => {
-            // Ultimate fallback - open email
-            const mailtoLink = `mailto:?subject=Daily Motivation&body=${encodeURIComponent(shareText)}`;
-            window.location.href = mailtoLink;
-        });
-    }
-}
-
-function saveQuote() {
-    if (!currentQuote) {
-        showNotification('No quote to save', 'error');
-        return;
-    }
-    
-    // Check if already saved
-    const isDuplicate = savedQuotes.some(q => 
-        q.text === currentQuote.text && q.author === currentQuote.author
-    );
-    
-    if (isDuplicate) {
-        showNotification('Quote already saved!', 'warning');
-        return;
-    }
-    
-    const quoteToSave = {
-        id: Date.now(),
-        ...currentQuote,
-        savedAt: new Date().toLocaleString()
-    };
-    
-    savedQuotes.unshift(quoteToSave);
-    
-    // Limit to 10 saved quotes
-    if (savedQuotes.length > 10) {
-        savedQuotes = savedQuotes.slice(0, 10);
-    }
-    
-    localStorage.setItem('savedQuotes', JSON.stringify(savedQuotes));
-    renderSavedQuotes();
-    showNotification('Quote saved to favorites!', 'success');
-}
-
-function removeSavedQuote(quoteId) {
-    savedQuotes = savedQuotes.filter(q => q.id !== quoteId);
-    localStorage.setItem('savedQuotes', JSON.stringify(savedQuotes));
-    renderSavedQuotes();
-    showNotification('Quote removed from favorites', 'info');
-}
-
-function renderSavedQuotes() {
-    const container = document.getElementById('savedQuotesList');
-    
-    if (savedQuotes.length === 0) {
-        container.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px; font-style: italic;">No saved quotes yet</div>';
-        return;
-    }
-    
-    container.innerHTML = savedQuotes.map(quote => `
-        <div class="saved-quote-item" onclick="loadSavedQuote(${quote.id})">
-            <div>
-                <div class="saved-quote-text">${quote.text}</div>
-                <div class="saved-quote-author">${quote.author}</div>
-            </div>
-            <button class="saved-quote-remove" onclick="event.stopPropagation(); removeSavedQuote(${quote.id})">×</button>
-        </div>
-    `).join('');
-}
-
-function loadSavedQuote(quoteId) {
-    const quote = savedQuotes.find(q => q.id === quoteId);
-    if (quote) {
-        currentQuote = quote;
-        displayQuote();
-        showNotification('Loaded saved quote!', 'info');
-    }
-}
-
-function getNewQuote() {
-    getRandomQuote();
-}
-
-// Regular user upload functionality (unchanged)
-document.addEventListener('DOMContentLoaded', function() {
-    const uploadArea = document.getElementById('uploadArea');
-    const fileInput = document.getElementById('fileInput');
-    const fileList = document.getElementById('fileList');
-
-    uploadArea.addEventListener('click', () => fileInput.click());
-    uploadArea.addEventListener('dragover', handleDragOver);
-    uploadArea.addEventListener('dragleave', handleDragLeave);
-    uploadArea.addEventListener('drop', handleDrop);
-    fileInput.addEventListener('change', handleFiles);
-
-    // Admin file upload setup
-    const adminFileInput = document.getElementById('adminFileInput');
-    if (adminFileInput) {
-        adminFileInput.addEventListener('change', handleAdminFileUpload);
-    }
-
-    // Initialize admin session
-    checkAdminSession();
-
-    // Initialize quotes
-    renderSavedQuotes();
-    getRandomQuote();
-
-    // Initialize with sample questions
-    addQuestion('text', 'What is the main topic of this document?');
-    addQuestion('multiple', 'Which of the following is mentioned in the document?');
-    
-    // Responsive adjustments
-    adjustViewerHeight();
-    window.addEventListener('resize', adjustViewerHeight);
-    
-    // Mobile sidebar toggle
-    const sidebar = document.querySelector('.sidebar');
-    document.addEventListener('click', (e) => {
-        if (window.innerWidth <= 1200 && !sidebar.contains(e.target) && !e.target.closest('.sidebar-toggle')) {
-            sidebar.classList.remove('open');
-        }
-    });
-});
-
-function handleDragOver(e) {
-    e.preventDefault();
-    document.getElementById('uploadArea').classList.add('dragover');
-}
-
-function handleDragLeave(e) {
-    e.preventDefault();
-    document.getElementById('uploadArea').classList.remove('dragover');
-}
-
-function handleDrop(e) {
-    e.preventDefault();
-    document.getElementById('uploadArea').classList.remove('dragover');
-    const files = Array.from(e.dataTransfer.files).filter(file => file.type === 'application/pdf');
-    handleFiles({ target: { files } });
-}
-
-function handleFiles(e) {
+// User File Management
+function handleUserFiles(e) {
     const files = Array.from(e.target.files).filter(file => file.type === 'application/pdf');
     
     files.forEach(file => {
         if (file.size > 10 * 1024 * 1024) { // 10MB limit
-            showNotification(`File ${file.name} is too large (max 10MB)`, 'error');
+            showNotification(`❌ ${file.name} is too large (max 10MB)`, 'error');
             return;
         }
         
-        if (uploadedFiles.length >= 5) {
-            showNotification('Maximum 5 files allowed', 'error');
+        if (userUploadedFiles.length >= 5) {
+            showNotification('⚠️ Maximum 5 files allowed', 'warning');
             return;
         }
 
         const reader = new FileReader();
         reader.onload = function(e) {
             const fileData = {
+                id: Date.now() + Math.random(),
                 name: file.name,
                 size: formatFileSize(file.size),
+                originalSize: file.size,
                 data: e.target.result,
-                id: Date.now() + Math.random(),
-                isAdmin: false
+                uploadedAt: new Date().toLocaleString(),
+                isAdmin: false,
+                downloadCount: 0
             };
             
-            uploadedFiles.push(fileData);
-            renderFileList();
-            showNotification(`Uploaded: ${file.name}`, 'success');
+            userUploadedFiles.unshift(fileData);
+            renderUserFileList();
+            showNotification(`✅ ${file.name} uploaded`, 'success');
         };
+        
+        reader.onerror = function() {
+            showNotification(`❌ Failed to read ${file.name}`, 'error');
+        };
+        
         reader.readAsArrayBuffer(file);
     });
 
     e.target.value = '';
 }
 
-function renderFileList() {
+function handleUserDragOver(e) {
+    e.preventDefault();
+    document.getElementById('uploadArea').classList.add('dragover');
+}
+
+function handleUserDragLeave(e) {
+    e.preventDefault();
+    document.getElementById('uploadArea').classList.remove('dragover');
+}
+
+function handleUserDrop(e) {
+    e.preventDefault();
+    document.getElementById('uploadArea').classList.remove('dragover');
+    const files = Array.from(e.dataTransfer.files).filter(file => file.type === 'application/pdf');
+    handleUserFiles({ target: { files } });
+}
+
+function renderUserFileList() {
     const fileList = document.getElementById('fileList');
-    fileList.innerHTML = uploadedFiles.map(file => `
+    
+    if (userUploadedFiles.length === 0) {
+        fileList.innerHTML = `
+            <div class="file-empty-state">
+                <div class="empty-icon">📁</div>
+                <p>No files uploaded</p>
+                <p class="empty-subtext">Drag and drop PDF files above to get started</p>
+            </div>
+        `;
+        return;
+    }
+    
+    fileList.innerHTML = userUploadedFiles.map(file => `
         <div class="file-item">
             <div class="file-info">
-                <div class="file-icon ${file.isAdmin ? 'admin-file' : ''}">
-                    ${file.isAdmin ? '🔐' : 'PDF'}
-                </div>
+                <div class="file-icon">📄</div>
                 <div>
                     <div class="file-name">${file.name}</div>
-                    <div class="file-size">${file.size}</div>
+                    <div class="file-details">
+                        <span class="file-size">${file.size}</span>
+                        <span class="file-date">${formatDate(file.uploadedAt)}</span>
+                        <span class="file-downloads">${file.downloadCount || 0} downloads</span>
+                    </div>
                 </div>
             </div>
             <div class="file-actions">
-                <button class="btn btn-primary" onclick="loadPDF(${file.id})">View</button>
-                ${!file.isAdmin ? 
-                    `<button class="btn btn-success" onclick="downloadPDF(${file.id})">Download</button>` : 
-                    `<button class="btn btn-secondary" onclick="showAdminLogin()" title="Admin access required">🔒 Admin</button>`
-                }
-                <button class="btn btn-danger" onclick="removeFile(${file.id})">Remove</button>
+                <button class="btn btn-primary" onclick="loadUserPDF(${file.id})">View</button>
+                <button class="btn btn-success" onclick="downloadUserPDF(${file.id})">Download</button>
+                <button class="btn btn-danger" onclick="removeUserFile(${file.id})">Remove</button>
             </div>
         </div>
     `).join('');
 }
 
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-function loadPDF(fileId) {
-    // Allow viewing of both regular and admin PDFs
-    const file = [...uploadedFiles, ...adminUploadedFiles].find(f => f.id === fileId);
+function loadUserPDF(fileId) {
+    const file = userUploadedFiles.find(f => f.id === fileId);
     if (!file) return;
 
-    currentPDF = file;
+    currentPDF = { ...file, source: 'user' };
     const loadingTask = pdfjsLib.getDocument({ data: file.data });
+    
+    showLoadingState(`Loading ${file.name}...`);
     
     loadingTask.promise.then(function(pdf) {
         pdfDoc = pdf;
         pageNum = 1;
         document.getElementById('totalPages').textContent = pdf.numPages;
         renderPage(pageNum);
-        showNotification(`Loaded: ${file.name}`, 'info');
+        showNotification(`📖 ${file.name} loaded`, 'info');
     }).catch(error => {
         console.error('Error loading PDF:', error);
-        showNotification('Error loading PDF', 'error');
+        showNotification('❌ Error loading document', 'error');
+        resetViewer();
     });
 }
 
+function downloadUserPDF(fileId) {
+    const file = userUploadedFiles.find(f => f.id === fileId);
+    if (!file) return;
+    
+    // Increment download count
+    file.downloadCount = (file.downloadCount || 0) + 1;
+    renderUserFileList();
+    
+    // Trigger download
+    const link = document.createElement('a');
+    link.href = file.data;
+    link.download = `user-${Date.now()}-${file.name}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Log download
+    logDownload(file);
+    showNotification(`✅ ${file.name} downloaded`, 'success');
+}
+
+function removeUserFile(fileId) {
+    if (confirm('Remove this file from your uploads?')) {
+        userUploadedFiles = userUploadedFiles.filter(f => f.id !== fileId);
+        renderUserFileList();
+        showNotification('🗑️ File removed', 'info');
+        
+        if (currentPDF && currentPDF.id === fileId) {
+            resetViewer();
+        }
+    }
+}
+
+// Download Tracking
+function logDownload(file) {
+    const downloadRecord = {
+        id: Date.now(),
+        name: file.name,
+        size: file.size,
+        originalSize: file.originalSize,
+        source: file.isAdmin ? 'admin' : 'user',
+        downloadedAt: new Date().toLocaleString(),
+        timestamp: Date.now()
+    };
+    
+    downloadedFiles.unshift(downloadRecord);
+    
+    // Keep only last 100 downloads
+    if (downloadedFiles.length > 100) {
+        downloadedFiles = downloadedFiles.slice(0, 100);
+    }
+    
+    localStorage.setItem('downloadedFiles', JSON.stringify(downloadedFiles));
+    renderDownloadHistory();
+    updateDownloadCount();
+}
+
+function renderDownloadHistory() {
+    const downloadsList = document.getElementById('downloadsList');
+    
+    if (downloadedFiles.length === 0) {
+        downloadsList.innerHTML = `
+            <div class="download-empty-state">
+                <div class="empty-icon">📥</div>
+                <p>No downloads yet</p>
+                <p class="empty-subtext">Download PDFs from the Viewer tab to see them here</p>
+            </div>
+        `;
+        return;
+    }
+    
+    downloadsList.innerHTML = downloadedFiles.map(download => `
+        <div class="download-item">
+            <div class="download-file-info">
+                <div class="download-icon">📄</div>
+                <div class="download-filename">${download.name}</div>
+            </div>
+            <div class="download-size">${download.size}</div>
+            <div class="download-date">${formatDate(download.downloadedAt)}</div>
+            <div class="download-source ${download.source}">${download.source}</div>
+            <div class="download-actions">
+                <button class="btn btn-secondary" onclick="reDownload(${download.id})" title="Download again">↻</button>
+                <button class="btn btn-danger" onclick="removeDownload(${download.id})" title="Remove from history">×</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function reDownload(downloadId) {
+    const download = downloadedFiles.find(d => d.id === downloadId);
+    if (!download) return;
+    
+    // This would typically trigger a re-download, but since we don't store the actual file data in history,
+    // we'll just log it as a re-download
+    logDownload({
+        name: download.name,
+        size: download.size,
+        originalSize: download.originalSize,
+        isAdmin: download.source === 'admin',
+        source: download.source
+    });
+    
+    showNotification(`🔄 ${download.name} re-downloaded`, 'info');
+}
+
+function removeDownload(downloadId) {
+    if (confirm('Remove this download from history?')) {
+        downloadedFiles = downloadedFiles.filter(d => d.id !== downloadId);
+        localStorage.setItem('downloadedFiles', JSON.stringify(downloadedFiles));
+        renderDownloadHistory();
+        updateDownloadCount();
+        showNotification('🗑️ Download removed from history', 'info');
+    }
+}
+
+function clearDownloads() {
+    if (confirm('Clear all download history? This cannot be undone.')) {
+        downloadedFiles = [];
+        localStorage.removeItem('downloadedFiles');
+        renderDownloadHistory();
+        updateDownloadCount();
+        showNotification('🗑️ Download history cleared', 'info');
+    }
+}
+
+function exportDownloads() {
+    if (downloadedFiles.length === 0) {
+        showNotification('No downloads to export', 'warning');
+        return;
+    }
+    
+    const exportData = {
+        exportedAt: new Date().toLocaleString(),
+        totalDownloads: downloadedFiles.length,
+        downloads: downloadedFiles
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `download-history-${formatDate(new Date())}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    showNotification('📤 Download history exported', 'success');
+}
+
+function updateDownloadCount() {
+    const countElement = document.getElementById('downloadCount');
+    if (countElement) {
+        countElement.textContent = downloadedFiles.length;
+    }
+}
+
+// PDF Viewer Functions
+function downloadCurrentPDF() {
+    if (!currentPDF) {
+        showNotification('No PDF loaded', 'warning');
+        return;
+    }
+    
+    if (currentPDF.isAdmin && !isAdminAuthenticated) {
+        showNotification('🔒 Admin documents require authentication', 'warning');
+        showAdminLogin();
+        return;
+    }
+    
+    const fileForDownload = {
+        ...currentPDF,
+        isAdmin: currentPDF.source === 'admin'
+    };
+    
+    const link = document.createElement('a');
+    link.href = currentPDF.data;
+    link.download = `${currentPDF.source}-${Date.now()}-${currentPDF.name}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Log the download
+    logDownload(fileForDownload);
+    
+    if (currentPDF.source === 'admin') {
+        // Update admin file download count
+        const adminFile = adminUploadedFiles.find(f => f.id === currentPDF.id);
+        if (adminFile) {
+            adminFile.downloadCount = (adminFile.downloadCount || 0) + 1;
+            localStorage.setItem('adminFiles', JSON.stringify(adminUploadedFiles));
+            renderAdminFiles();
+        }
+    } else {
+        // Update user file download count
+        const userFile = userUploadedFiles.find(f => f.id === currentPDF.id);
+        if (userFile) {
+            userFile.downloadCount = (userFile.downloadCount || 0) + 1;
+            renderUserFileList();
+        }
+    }
+    
+    showNotification(`✅ ${currentPDF.name} downloaded`, 'success');
+}
+
+function showLoadingState(message) {
+    const viewerContainer = document.getElementById('viewerContainer');
+    viewerContainer.innerHTML = `
+        <div class="viewer-loading">
+            <div class="loading-spinner-large"></div>
+            <p>${message}</p>
+        </div>
+    `;
+}
+
 function renderPage(num) {
+    if (!pdfDoc) return;
+    
     pageNum = num;
     document.getElementById('currentPage').textContent = pageNum;
-    document.getElementById('prevPage').disabled = pageNum <= 1;
-    document.getElementById('nextPage').disabled = pageNum >= pdfDoc.numPages;
-
+    const totalPages = document.getElementById('totalPages');
+    const prevBtn = document.getElementById('prevPage');
+    const nextBtn = document.getElementById('nextPage');
+    
+    prevBtn.disabled = pageNum <= 1;
+    nextBtn.disabled = pageNum >= pdfDoc.numPages;
+    
     const viewerContainer = document.getElementById('viewerContainer');
-    viewerContainer.innerHTML = '<div style="display: flex; align-items: center; justify-content: center; height: 100%;"><div class="loading"></div></div>';
+    showLoadingState('Rendering page...');
 
     pdfDoc.getPage(num).then(function(page) {
         const viewport = page.getViewport({ scale: scale });
@@ -767,75 +868,108 @@ function renderPage(num) {
             pageDiv.className = 'pdf-page';
             pageDiv.appendChild(canvas);
             
-            const existingPages = viewerContainer.querySelectorAll('.pdf-page');
-            existingPages.forEach(page => page.remove());
-            
+            viewerContainer.innerHTML = '';
             viewerContainer.appendChild(pageDiv);
+        }).catch(error => {
+            console.error('Error rendering page:', error);
+            viewerContainer.innerHTML = `
+                <div class="viewer-placeholder">
+                    <div class="placeholder-icon">⚠️</div>
+                    <p>Error rendering page ${pageNum}</p>
+                    <p class="placeholder-subtext">Please try again</p>
+                </div>
+            `;
         });
     });
 }
 
 function previousPage() {
-    if (pageNum <= 1) return;
+    if (pageNum <= 1 || !pdfDoc) return;
     renderPage(pageNum - 1);
 }
 
 function nextPage() {
-    if (pageNum >= pdfDoc.numPages) return;
+    if (pageNum >= pdfDoc.numPages || !pdfDoc) return;
     renderPage(pageNum + 1);
 }
 
-function removeFile(fileId) {
-    uploadedFiles = uploadedFiles.filter(f => f.id !== fileId);
-    if (currentPDF && currentPDF.id === fileId) {
-        currentPDF = null;
-        pdfDoc = null;
-        document.getElementById('viewerContainer').innerHTML = 
-            '<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">Select a PDF to view</div>';
-        document.getElementById('currentPage').textContent = '1';
-        document.getElementById('totalPages').textContent = '1';
-    }
-    renderFileList();
-    showNotification('File removed', 'info');
+function resetViewer() {
+    const viewerContainer = document.getElementById('viewerContainer');
+    viewerContainer.innerHTML = `
+        <div class="viewer-placeholder">
+            <div class="placeholder-icon">📄</div>
+            <p>Select a PDF to view</p>
+            <p class="placeholder-subtext">Upload files or contact admin for access</p>
+        </div>
+    `;
+    document.getElementById('currentPage').textContent = '1';
+    document.getElementById('totalPages').textContent = '1';
+    document.getElementById('prevPage').disabled = true;
+    document.getElementById('nextPage').disabled = true;
+    currentPDF = null;
+    pdfDoc = null;
 }
 
-// Questions functionality
-function addQuestion(type = 'text', text = '') {
+// Questions Management
+function initializeQuestions() {
+    // Start with empty questions
+    renderQuestions();
+}
+
+function addQuestion(type = 'text', text = 'New note...') {
     questionCounter++;
     const questionId = `q${questionCounter}`;
     const question = {
         id: questionId,
         type: type,
-        text: text || `Question ${questionCounter}`,
-        answer: ''
+        text: text,
+        answer: '',
+        createdAt: new Date().toLocaleString()
     };
     
-    questions.push(question);
+    questions.unshift(question);
     renderQuestions();
+    showNotification('📝 New note added', 'info');
 }
 
 function renderQuestions() {
     const container = document.getElementById('questionsContainer');
+    
+    if (questions.length === 0) {
+        container.innerHTML = `
+            <div class="question-placeholder">
+                <div class="placeholder-icon">📝</div>
+                <p>No notes yet</p>
+                <p class="placeholder-subtext">Click "Add Note" to start taking notes about your document</p>
+            </div>
+        `;
+        return;
+    }
+    
     container.innerHTML = questions.map((question, index) => `
         <div class="question-item" data-id="${question.id}">
             <div class="question-header">
                 <div class="question-number">${index + 1}</div>
-                <div style="flex: 1;">
+                <div class="question-main">
                     <input type="text" class="question-text" value="${question.text}" 
-                           placeholder="Enter your question here..." 
+                           placeholder="Enter note title..." 
                            oninput="updateQuestion('${question.id}', 'text', this.value)">
+                    <textarea class="question-input" placeholder="Enter your notes here..."
+                              oninput="updateQuestion('${question.id}', 'answer', this.value)">${question.answer}</textarea>
                 </div>
                 <div class="question-actions">
                     <select class="question-type-select" onchange="updateQuestion('${question.id}', 'type', this.value)">
-                        <option value="text" ${question.type === 'text' ? 'selected' : ''}>Text</option>
-                        <option value="multiple" ${question.type === 'multiple' ? 'selected' : ''}>Multiple Choice</option>
-                        <option value="yesno" ${question.type === 'yesno' ? 'selected' : ''}>Yes/No</option>
+                        <option value="text" ${question.type === 'text' ? 'selected' : ''}>Note</option>
+                        <option value="question" ${question.type === 'question' ? 'selected' : ''}>Question</option>
+                        <option value="highlight" ${question.type === 'highlight' ? 'selected' : ''}>Highlight</option>
                     </select>
-                    <button class="remove-question" onclick="removeQuestion('${question.id}')">Remove</button>
+                    <button class="remove-question" onclick="removeQuestion('${question.id}')">×</button>
                 </div>
             </div>
-            <textarea class="question-input" placeholder="Enter your answer here..."
-                      oninput="updateQuestion('${question.id}', 'answer', this.value)">${question.answer}</textarea>
+            <div class="question-meta">
+                <span class="question-date">${formatDate(question.createdAt)}</span>
+                <span class="question-type-badge ${question.type}">${question.type}</span>
+            </div>
         </div>
     `).join('');
 }
@@ -844,103 +978,330 @@ function updateQuestion(id, field, value) {
     const question = questions.find(q => q.id === id);
     if (question) {
         question[field] = value;
+        if (field === 'text' && question.text.trim() === '') {
+            removeQuestion(id);
+        }
     }
 }
 
 function removeQuestion(id) {
     questions = questions.filter(q => q.id !== id);
     renderQuestions();
-    showNotification('Question removed', 'info');
+    showNotification('🗑️ Note removed', 'info');
 }
 
 function saveQuestions() {
     if (questions.length === 0) {
-        showNotification('No questions to save', 'warning');
+        showNotification('No notes to save', 'warning');
         return;
     }
     
-    const questionsData = JSON.stringify(questions, null, 2);
-    const blob = new Blob([questionsData], { type: 'application/json' });
+    const exportData = {
+        document: currentPDF ? currentPDF.name : 'General Notes',
+        createdAt: new Date().toLocaleString(),
+        totalNotes: questions.length,
+        notes: questions
+    };
+    
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `questions-${currentPDF ? currentPDF.name.replace('.pdf', '') : 'document'}.json`;
+    link.download = `notes-${currentPDF ? currentPDF.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() : 'general'}-${formatDate(new Date())}.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     
-    showNotification('Questions saved successfully!', 'success');
+    showNotification('📝 Notes exported successfully', 'success');
 }
 
-// Notification system
+// Quote Management
+async function getRandomQuote() {
+    const quoteLoading = document.getElementById('quoteLoading');
+    const quoteContent = document.getElementById('quoteContent');
+    
+    quoteLoading.classList.add('active');
+    quoteContent.classList.remove('show');
+    
+    try {
+        const sources = Object.keys(quoteSources);
+        const randomSource = sources[Math.floor(Math.random() * sources.length)];
+        const source = quoteSources[randomSource];
+        
+        const response = await fetch(source.url);
+        if (!response.ok) throw new Error('Network response was not ok');
+        
+        const data = await response.json();
+        currentQuote = source.format(data);
+        
+        displayQuote();
+        
+    } catch (error) {
+        console.error('Error fetching quote:', error);
+        displayFallbackQuote();
+    }
+}
+
+function displayQuote() {
+    const quoteText = document.getElementById('quoteText');
+    const quoteAuthor = document.getElementById('quoteAuthor');
+    const quoteSource = document.getElementById('quoteSource');
+    const quoteContent = document.getElementById('quoteContent');
+    const quoteLoading = document.getElementById('quoteLoading');
+    
+    quoteText.textContent = `"${currentQuote.text}"`;
+    quoteAuthor.textContent = `— ${currentQuote.author}`;
+    quoteSource.textContent = currentQuote.source;
+    
+    quoteLoading.classList.remove('active');
+    quoteContent.classList.add('show');
+}
+
+function displayFallbackQuote() {
+    const fallbackQuotes = [
+        { text: "The only way to do great work is to love what you do.", author: "Steve Jobs", source: "Timeless Wisdom" },
+        { text: "Innovation distinguishes between a leader and a follower.", author: "Steve Jobs", source: "Innovation" },
+        { text: "The future belongs to those who believe in the beauty of their dreams.", author: "Eleanor Roosevelt", source: "Dreams" },
+        { text: "Success is not final, failure is not fatal: it is the courage to continue that counts.", author: "Winston Churchill", source: "Perseverance" },
+        { text: "The only limit to our realization of tomorrow will be our doubts of today.", author: "Franklin D. Roosevelt", source: "Potential" }
+    ];
+    
+    currentQuote = fallbackQuotes[Math.floor(Math.random() * fallbackQuotes.length)];
+    displayQuote();
+}
+
+async function getQuoteByCategory(category) {
+    try {
+        const response = await fetch(`https://api.quotable.io/random?tags=${category}`);
+        if (!response.ok) throw new Error('Network response was not ok');
+        
+        const data = await response.json();
+        currentQuote = {
+            text: data.content,
+            author: data.author,
+            source: `Inspiration - ${category.charAt(0).toUpperCase() + category.slice(1)}`
+        };
+        
+        displayQuote();
+        
+    } catch (error) {
+        console.error('Error fetching category quote:', error);
+        displayFallbackQuote();
+    }
+}
+
+function shareQuote() {
+    if (!currentQuote) {
+        showNotification('No quote to share', 'warning');
+        return;
+    }
+    
+    const shareText = `"${currentQuote.text}" — ${currentQuote.author}\n\n${currentQuote.source}`;
+    
+    if (navigator.share) {
+        navigator.share({
+            title: 'Daily Inspiration',
+            text: shareText
+        }).catch(() => {
+            copyToClipboard(shareText);
+        });
+    } else {
+        copyToClipboard(shareText);
+    }
+}
+
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        showNotification('📋 Quote copied to clipboard!', 'success');
+    }).catch(() => {
+        // Fallback to prompt
+        prompt('Copy this quote:', text);
+        showNotification('📋 Quote ready to copy', 'info');
+    });
+}
+
+function saveQuote() {
+    if (!currentQuote) {
+        showNotification('No quote to save', 'warning');
+        return;
+    }
+    
+    const isDuplicate = savedQuotes.some(q => 
+        q.text === currentQuote.text && q.author === currentQuote.author
+    );
+    
+    if (isDuplicate) {
+        showNotification('Quote already in favorites', 'warning');
+        return;
+    }
+    
+    const quoteToSave = {
+        id: Date.now(),
+        ...currentQuote,
+        savedAt: new Date().toLocaleString()
+    };
+    
+    savedQuotes.unshift(quoteToSave);
+    
+    if (savedQuotes.length > 20) {
+        savedQuotes = savedQuotes.slice(0, 20);
+    }
+    
+    localStorage.setItem('savedQuotes', JSON.stringify(savedQuotes));
+    renderSavedQuotes();
+    showNotification('⭐ Quote saved to favorites', 'success');
+}
+
+function renderSavedQuotes() {
+    const container = document.querySelector('.quote-categories');
+    const savedSection = container.querySelector('.saved-quotes-section');
+    
+    if (!savedSection) {
+        container.innerHTML += `
+            <div class="saved-quotes-section">
+                <h4>Favorites (${savedQuotes.length})</h4>
+                <div class="saved-quotes-list"></div>
+            </div>
+        `;
+    }
+    
+    const savedList = container.querySelector('.saved-quotes-list');
+    
+    if (savedQuotes.length === 0) {
+        savedList.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px; font-style: italic;">No favorite quotes yet</div>';
+        return;
+    }
+    
+    savedList.innerHTML = savedQuotes.slice(0, 4).map(quote => `
+        <div class="saved-quote-item" onclick="loadSavedQuote(${quote.id})" title="Click to view">
+            <div class="saved-quote-text">${quote.text.substring(0, 60)}${quote.text.length > 60 ? '...' : ''}</div>
+            <div class="saved-quote-author">— ${quote.author}</div>
+        </div>
+    `).join('');
+}
+
+function loadSavedQuote(quoteId) {
+    const quote = savedQuotes.find(q => q.id === quoteId);
+    if (quote) {
+        currentQuote = quote;
+        displayQuote();
+        showNotification('⭐ Loaded favorite quote', 'info');
+    }
+}
+
+// Utility Functions
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function formatDate(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+}
+
+function adjustViewerHeight() {
+    const viewerContainer = document.getElementById('viewerContainer');
+    const availableHeight = window.innerHeight - 200;
+    viewerContainer.style.height = Math.max(400, availableHeight) + 'px';
+}
+
+// Keyboard Shortcuts
+function setupKeyboardShortcuts() {
+    document.addEventListener('keydown', function(e) {
+        // Only trigger shortcuts when not in input fields
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        
+        if (e.ctrlKey || e.metaKey) {
+            switch(e.key) {
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    previousPage();
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    nextPage();
+                    break;
+                case '1':
+                    e.preventDefault();
+                    switchTab('viewer');
+                    break;
+                case '2':
+                    e.preventDefault();
+                    switchTab('downloads');
+                    break;
+                case '3':
+                    e.preventDefault();
+                    showAdminLogin();
+                    break;
+                case 'Enter':
+                    if (e.shiftKey) {
+                        e.preventDefault();
+                        addQuestion();
+                    }
+                    break;
+                case 's':
+                    if (e.shiftKey) {
+                        e.preventDefault();
+                        saveQuestions();
+                    }
+                    break;
+            }
+        }
+    });
+}
+
+// Notification System
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message;
     document.body.appendChild(notification);
     
-    setTimeout(() => notification.classList.add('show'), 100);
+    requestAnimationFrame(() => {
+        notification.classList.add('show');
+    });
+    
     setTimeout(() => {
         notification.classList.remove('show');
-        setTimeout(() => document.body.removeChild(notification), 300);
-    }, 3000);
+        setTimeout(() => {
+            if (document.body.contains(notification)) {
+                document.body.removeChild(notification);
+            }
+        }, 300);
+    }, 4000);
 }
 
-// Keyboard shortcuts
-document.addEventListener('keydown', function(e) {
-    if (e.ctrlKey || e.metaKey) {
-        switch(e.key) {
-            case 'ArrowLeft':
-                e.preventDefault();
-                previousPage();
-                break;
-            case 'ArrowRight':
-                e.preventDefault();
-                nextPage();
-                break;
-            case 'Enter':
-                if (e.shiftKey) addQuestion();
-                break;
-            case 'q':
-                if (e.shiftKey) getNewQuote();
-                break;
-            case 'a':
-                if (e.shiftKey) showAdminLogin();
-                break;
-        }
-    }
-});
-
-// Responsive adjustments
-function adjustViewerHeight() {
-    const viewerContainer = document.getElementById('viewerContainer');
-    const headerHeight = document.querySelector('.header').offsetHeight;
-    const controlsHeight = document.querySelector('.viewer-controls').offsetHeight;
-    const availableHeight = window.innerHeight - headerHeight - 200;
-    viewerContainer.style.height = Math.max(400, availableHeight) + 'px';
-}
-
-// Export functions for global access
+// Global Functions for onclick handlers
+window.toggleTheme = toggleTheme;
+window.switchTab = switchTab;
 window.showAdminLogin = showAdminLogin;
 window.authenticateAdmin = authenticateAdmin;
 window.closeAdminLogin = closeAdminLogin;
-window.loadAdminPDF = loadAdminPDF;
-window.downloadAdminPDF = downloadAdminPDF;
-window.removeAdminFile = removeAdminFile;
+window.logoutAdmin = logoutAdmin;
 window.getNewQuote = getNewQuote;
 window.getQuoteByCategory = getQuoteByCategory;
 window.shareQuote = shareQuote;
 window.saveQuote = saveQuote;
-window.removeSavedQuote = removeSavedQuote;
 window.loadSavedQuote = loadSavedQuote;
 window.addQuestion = addQuestion;
 window.previousPage = previousPage;
 window.nextPage = nextPage;
 window.downloadCurrentPDF = downloadCurrentPDF;
-window.downloadPDF = downloadPDF;
-window.removeFile = removeFile;
+window.removeUserFile = removeUserFile;
 window.saveQuestions = saveQuestions;
 window.removeQuestion = removeQuestion;
 window.updateQuestion = updateQuestion;
-window.toggleTheme = toggleTheme;
+window.loadAdminPDF = loadAdminPDF;
+window.downloadAdminPDF = downloadAdminPDF;
+window.removeAdminFile = removeAdminFile;
+window.clearDownloads = clearDownloads;
+window.exportDownloads = exportDownloads;
+window.reDownload = reDownload;
+window.removeDownload = removeDownload;
+window.loadUserPDF = loadUserPDF;
+window.downloadUserPDF = downloadUserPDF;
