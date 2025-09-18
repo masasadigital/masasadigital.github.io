@@ -2,12 +2,113 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Masasa Teaching Web</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Document Manager - Responsive Viewer & Downloader</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <link rel="stylesheet" href="index.css">
 </head>
 <body>
-    <h1>Hello, Learner!</h1>
-    <button id="myButton">Click Me!</button>
-    <script src="script.js" defer></script>
+    <div class="theme-toggle" onclick="toggleTheme()">
+        <span id="themeIcon">🌙</span>
+        <span id="themeText">Dark Mode</span>
+    </div>
+
+    <div class="app-wrapper">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h3 class="sidebar-title">💡 Daily Motivation</h3>
+                <button class="new-quote-btn" onclick="getNewQuote()">⟳ New Quote</button>
+            </div>
+            
+            <div class="quote-container">
+                <div class="quote-loading" id="quoteLoading">
+                    <div class="loading-spinner"></div>
+                    <span>Loading inspiration...</span>
+                </div>
+                
+                <div class="quote-content" id="quoteContent">
+                    <div class="quote-text" id="quoteText"></div>
+                    <div class="quote-author" id="quoteAuthor"></div>
+                    <div class="quote-source" id="quoteSource"></div>
+                </div>
+                
+                <div class="quote-actions">
+                    <button class="btn btn-secondary" onclick="shareQuote()">📤 Share</button>
+                    <button class="btn btn-success" onclick="saveQuote()">💾 Save</button>
+                </div>
+            </div>
+            
+            <div class="quote-categories">
+                <h4>Quick Picks</h4>
+                <div class="category-buttons">
+                    <button class="category-btn" data-category="success" onclick="getQuoteByCategory('success')">Success</button>
+                    <button class="category-btn" data-category="motivation" onclick="getQuoteByCategory('motivation')">Motivation</button>
+                    <button class="category-btn" data-category="wisdom" onclick="getQuoteByCategory('wisdom')">Wisdom</button>
+                    <button class="category-btn" data-category="happiness" onclick="getQuoteByCategory('happiness')">Happiness</button>
+                </div>
+            </div>
+            
+            <div class="saved-quotes" id="savedQuotes">
+                <h4>Saved Quotes</h4>
+                <div class="saved-quotes-list" id="savedQuotesList"></div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content-wrapper">
+            <div class="container">
+                <div class="header">
+                    <h1>PDF Document Manager</h1>
+                    <p>Upload, view, and manage your PDF documents with an intuitive interface. Create questions and annotations directly within your documents.</p>
+                </div>
+
+                <div class="main-content">
+                    <div class="upload-section">
+                        <h2 class="section-title">📁 Document Upload</h2>
+                        <div class="upload-area" id="uploadArea">
+                            <div class="upload-icon">📄</div>
+                            <div class="upload-text">Drop PDF files here or click to browse</div>
+                            <div class="upload-subtext">Supports multiple PDF uploads (max 10MB each)</div>
+                            <input type="file" id="fileInput" accept=".pdf" multiple>
+                        </div>
+                        <div class="file-list" id="fileList"></div>
+                    </div>
+
+                    <div class="viewer-section">
+                        <h2 class="section-title">👁️ Document Viewer</h2>
+                        <div class="viewer-controls">
+                            <div class="page-info">
+                                <span id="currentPage">1</span> / <span id="totalPages">1</span>
+                            </div>
+                            <div class="navigation-btns">
+                                <button class="btn btn-primary" id="prevPage" onclick="previousPage()">← Previous</button>
+                                <button class="btn btn-primary" id="nextPage" onclick="nextPage()">Next →</button>
+                                <button class="btn btn-success" id="downloadBtn" onclick="downloadCurrentPDF()">⬇️ Download</button>
+                            </div>
+                        </div>
+                        <div class="viewer-container" id="viewerContainer">
+                            <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-secondary);">
+                                Select a PDF to view
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="questions-section">
+                    <div class="questions-header">
+                        <h2 class="questions-title">❓ Document Questions & Notes</h2>
+                        <button class="add-question-btn" onclick="addQuestion()">+ Add Question</button>
+                    </div>
+                    <div class="questions-container" id="questionsContainer">
+                        <!-- Questions will be dynamically added here -->
+                    </div>
+                    <button class="save-questions-btn" onclick="saveQuestions()">💾 Save All Questions</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
 </body>
 </html>
